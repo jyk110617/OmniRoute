@@ -1,0 +1,48 @@
+name: Build v3.8.50 for darwin-arm64
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout v3.8.50
+        uses: actions/checkout@v4
+        with:
+          ref: v3.8.50
+          submodules: recursive
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies (skip scripts to avoid husky issue)
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Build Next.js standalone
+        run: NODE_OPTIONS="--max-old-space-size=8192" npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Run postinstall (no-op on Linux, but normalizes paths)
+        run: node scripts/build/postinstall.mjs || true
+
+      - name: Package artifact
+        run: |
+          mkdir -p artifact
+          rsync -a --exclude=node_modules --exclude=.build --exclude=.next/cache \
+            bin scripts src app public package.json package-lock.json .next/standalone \
+            artifact/
+          tar czf omniroute-3.8.50-built.tar.gz -C artifact .
+          echo "Artifact size:"
+          ls -lh omniroute-3.8.50-built.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omniroute-3.8.50-built
+          path: omniroute-3.8.50-built.tar.gz
+          retention-days: 7
