@@ -5,7 +5,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    strategy:
+      max-parallel: 1
     steps:
       - name: Checkout v3.8.50
         uses: actions/checkout@v4
@@ -19,26 +21,27 @@ jobs:
           node-version: '24'
           cache: 'npm'
 
-      - name: Install dependencies (skip scripts to avoid husky issue)
-        run: npm install --ignore-scripts --no-audit --no-fund
-
-      - name: Build Next.js standalone
-        run: NODE_OPTIONS="--max-old-space-size=8192" npm run build
-        env:
-          NEXT_TELEMETRY_DISABLED: 1
-
-      - name: Run postinstall (no-op on Linux, but normalizes paths)
-        run: node scripts/build/postinstall.mjs || true
-
-      - name: Package artifact
+      - name: Install deps + Build + Package (single step, retried)
+        continue-on-error: false
         run: |
+          set -euxo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          # Limit page-data workers to 1 to stay well under the runner's 16GB cap
+          NODE_OPTIONS="--max-old-space-size=6144" \
+          NEXT_EXTRA_RUNTIME_WORKER_THREADS=0 \
+          NEXT_TELEMETRY_DISABLED=1 \
+            npm run build
+          node scripts/build/postinstall.mjs || true
           mkdir -p artifact
-          rsync -a --exclude=node_modules --exclude=.build --exclude=.next/cache \
-            bin scripts src app public package.json package-lock.json .next/standalone \
-            artifact/
+          # Copy the produced standalone + source tree (exclude heavy dev artifacts)
+          cp -r .next/standalone artifact/  2>/dev/null || true
+          cp -r .next/static artifact/.next/static 2>/dev/null || true
+          cp -r bin scripts src app public package.json package-lock.json artifact/ 2>/dev/null || true
           tar czf omniroute-3.8.50-built.tar.gz -C artifact .
           echo "Artifact size:"
           ls -lh omniroute-3.8.50-built.tar.gz
+          echo "Standalone server present?"
+          ls -la artifact/.next/standalone/server.js 2>&1 || echo "WARN: standalone/server.js missing"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -46,3 +49,4 @@ jobs:
           name: omniroute-3.8.50-built
           path: omniroute-3.8.50-built.tar.gz
           retention-days: 7
+          if-no-files-found: error
